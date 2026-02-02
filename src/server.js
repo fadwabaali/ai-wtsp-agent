@@ -6,8 +6,8 @@ import webhookRoutes from "./routes/webhook.js";
 export function startServer() {
   const app = express();
 
-  app.use(bodyParser.json());
   app.use(bodyParser.urlencoded({ extended: false }));
+  app.use(bodyParser.json());
 
   app.get("/", (req, res) => {
     res.send("Server is running");

@@ -3,43 +3,36 @@ import twilio from "twilio";
 import { talkToAI } from "../agent/agent.js";
 
 const router = express.Router();
-
 router.post("/", async (req, res) => {
+  console.log("🔥 WEBHOOK HIT");
+  console.log("BODY FULL:", req.body);
 
   const incomingMsg = req.body.Body;
   const mediaType = req.body.MediaContentType0;
 
+  console.log("TEXT:", incomingMsg);
+  console.log("MEDIA:", mediaType);
+
   const twiml = new twilio.twiml.MessagingResponse();
 
   try {
-    // IMAGE MESSAGE
     if (mediaType && mediaType.startsWith("image")) {
-      twiml.message(
-        "توصلنا بالصورة 😊✨ إلى سمحتي قولي لينا فالكلام شنو بغيتِ بالضبط باش نعاونك 🤍🛍️"
-      );
-    }
-
-    // AUDIO MESSAGE
+      twiml.message("صورة وصلات 📸");
+    } 
     else if (mediaType && mediaType.startsWith("audio")) {
-      twiml.message(
-        "توصلنا بالرسالة الصوتية 🎤✨ حاليا كنخدمو غير بالكلام المكتوب، إلى سمحتي كتبِ لينا شنو محتاجة 😊🤍"
-      );
-    }
-
-    // TEXT → OLLAMA AI
+      twiml.message("صوت وصل 🎤");
+    } 
     else {
-      const aiReply = await talkToAI(incomingMsg);
-      twiml.message(aiReply);
+      twiml.message("نص وصل ✅");
     }
-  } catch (error) {
-    console.error("Error:", error);
-    twiml.message(
-      "وقع شي مشكل صغير 😕✨ إلى سمحتي عاودي المحاولة من بعد شوية 🤍"
-    );
+  } catch (err) {
+    console.error(err);
+    twiml.message("error");
   }
 
   res.type("text/xml");
   res.send(twiml.toString());
 });
+
 
 export default router;
