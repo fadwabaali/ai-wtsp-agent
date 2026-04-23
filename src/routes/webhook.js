@@ -1,56 +1,217 @@
 import express from "express";
 import twilio from "twilio";
+
+import { PRODUCTS } from "../data/products.js";
+import { getSession, updateSession, clearSession } from "../services/sessionService.js";
+import { saveOrder } from "../services/orderService.js";
+import { isValidPhone, isValidQuantity } from "../utils/validators.js";
 import { talkToAI } from "../agent/agent.js";
 
 const router = express.Router();
 
 router.post("/", async (req, res) => {
-  console.log("🔥 WEBHOOK HIT");
-  console.log("BODY:", req.body);
-
-  const incomingMsg = req.body.Body || req.body.body || ""; // text
-  const mediaType = req.body.MediaContentType0; // image/audio
-
-  console.log("TEXT:", incomingMsg);
-  console.log("MEDIA:", mediaType);
+  const incomingMsg = (req.body.Body || "").trim();
+  const userId = req.body.From;
+  const mediaType = req.body.MediaContentType0;
 
   const twiml = new twilio.twiml.MessagingResponse();
+  const session = getSession(userId);
 
   try {
-    // IMAGE MESSAGE
+    // =========================
+    // MEDIA HANDLING
+    // =========================
     if (mediaType && mediaType.startsWith("image")) {
-      twiml.message(
-        "توصلنا بالصورة 😊✨ إلى سمحتي قولي لينا فالكلام شنو بغيتِ بالضبط باش نعاونك 🤍🛍️"
+      return respond(twiml, res,
+        "توصلنا بالصورة 😊✨ إلا سمحتي كتب لينا شنو بغيتي باش نعاونك 🤍"
       );
     }
-    // AUDIO MESSAGE
-    else if (mediaType && mediaType.startsWith("audio")) {
-      twiml.message(
-        "توصلنا بالرسالة الصوتية 🎤✨ حاليا كنخدمو غير بالكلام المكتوب، إلى سمحتي كتبِ لينا شنو محتاجة 😊🤍"
+
+    if (mediaType && mediaType.startsWith("audio")) {
+      return respond(twiml, res,
+        "توصلنا بالصوت 🎤 حاليا خدامين غير بالكتابة، كتب لينا شنو محتاجة 🤍"
       );
     }
-    // TEXT MESSAGE → AI
-    else if (incomingMsg.trim() !== "") {
-      console.log("TEXT RECEIVED FOR AI:", incomingMsg);
+
+    // =========================
+    // AI TRIGGER (ONLY OUTSIDE FLOW)
+    // =========================
+    if (session.step === "START" && shouldUseAI(incomingMsg)) {
       const aiReply = await talkToAI(incomingMsg);
-      console.log("AI REPLIED:", aiReply);
-      twiml.message(aiReply);
+      return respond(twiml, res, aiReply);
     }
-    //EMPTY MESSAGE FALLBACK
-    else {
-      twiml.message(
-        "مرحبا 😊✨ كيفاش نقدر نعاونك اليوم؟ 🛍️🤍"
+
+    // =========================
+    // ORDER FLOW
+    // =========================
+
+    // START → ASK PRODUCT
+    if (session.step === "START") {
+      session.step = "ASK_PRODUCT";
+      updateSession(userId, session);
+
+      const productList = PRODUCTS.map(p => `- ${p.name}`).join("\n");
+
+      return respond(twiml, res,
+        `مرحبا 😊✨ مرحبا بك فـ Fatima Style!\n\nشنو بغيتي من هاد المنتجات:\n${productList}`
       );
     }
-  } catch (error) {
-    console.error("WEBHOOK ERROR:", error);
-    twiml.message(
-      "وقع شي مشكل صغير 😕✨ إلى سمحتي عاودي المحاولة من بعد شوية 🤍"
+
+    // PRODUCT
+    if (session.step === "ASK_PRODUCT") {
+      const product = PRODUCTS.find(p =>
+        p.name.toLowerCase().includes(incomingMsg.toLowerCase())
+      );
+
+      if (!product) {
+        return respond(twiml, res,
+          "سمحي ليا، هاد المنتج ما عندناش 🤍 جربي واحد من اللائحة"
+        );
+      }
+
+      session.data.product = product.name;
+      session.productRef = product;
+      session.step = "ASK_SIZE";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        `شنو المقاس؟ ${product.sizes.join(" / ")}`
+      );
+    }
+
+    // SIZE
+    if (session.step === "ASK_SIZE") {
+      if (!session.productRef.sizes.includes(incomingMsg)) {
+        return respond(twiml, res,
+          "اختاري مقاس صحيح 🤍"
+        );
+      }
+
+      session.data.size = incomingMsg;
+      session.step = "ASK_COLOR";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        `شنو اللون؟ ${session.productRef.colors.join(" / ")}`
+      );
+    }
+
+    // COLOR
+    if (session.step === "ASK_COLOR") {
+      if (!session.productRef.colors.includes(incomingMsg)) {
+        return respond(twiml, res,
+          "اختاري لون صحيح 🤍"
+        );
+      }
+
+      session.data.color = incomingMsg;
+      session.step = "ASK_QTY";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        "شحال العدد؟"
+      );
+    }
+
+    // QUANTITY
+    if (session.step === "ASK_QTY") {
+      if (!isValidQuantity(incomingMsg)) {
+        return respond(twiml, res,
+          "دخل عدد صحيح 🤍"
+        );
+      }
+
+      session.data.quantity = incomingMsg;
+      session.step = "ASK_CITY";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        "فين المدينة؟"
+      );
+    }
+
+    // CITY
+    if (session.step === "ASK_CITY") {
+      session.data.city = incomingMsg;
+      session.step = "ASK_PHONE";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        "عطينا رقم الهاتف 🤍"
+      );
+    }
+
+    // PHONE
+    if (session.step === "ASK_PHONE") {
+      if (!isValidPhone(incomingMsg)) {
+        return respond(twiml, res,
+          "رقم غير صحيح 🤍"
+        );
+      }
+
+      session.data.phone = incomingMsg;
+      session.step = "CONFIRM";
+      updateSession(userId, session);
+
+      return respond(twiml, res,
+        `تأكيد الطلب:\n
+📦 ${session.data.product}
+📏 ${session.data.size}
+🎨 ${session.data.color}
+🔢 ${session.data.quantity}
+📍 ${session.data.city}
+📞 ${session.data.phone}
+
+كتب YES باش تأكد 🤍`
+      );
+    }
+
+    // CONFIRM
+    if (session.step === "CONFIRM") {
+      if (incomingMsg.toLowerCase() === "yes") {
+        saveOrder(session.data);
+        clearSession(userId);
+
+        return respond(twiml, res,
+          "تم تأكيد الطلب ديالك 🎉 شكرا بزاف 🤍"
+        );
+      } else {
+        return respond(twiml, res,
+          "كتب YES باش تأكد الطلب 🤍"
+        );
+      }
+    }
+
+  } catch (err) {
+    console.error("WEBHOOK ERROR:", err);
+    return respond(twiml, res,
+      "وقع مشكل 😅 عاودي المحاولة من بعد 🤍"
     );
   }
-
-  res.type("text/xml");
-  res.send(twiml.toString());
 });
+
+// =========================
+// HELPERS
+// =========================
+
+function respond(twiml, res, message) {
+  twiml.message(message);
+  res.type("text/xml");
+  return res.send(twiml.toString());
+}
+
+function shouldUseAI(message) {
+  if (!message) return false;
+
+  const triggers = [
+    "ثمن", "prix", "price",
+    "واش", "عندكم", "كاين",
+    "شنو", "help", "?"
+  ];
+
+  return triggers.some(word =>
+    message.toLowerCase().includes(word)
+  );
+}
 
 export default router;
