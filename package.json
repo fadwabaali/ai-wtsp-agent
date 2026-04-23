@@ -14,6 +14,7 @@
     "body-parser": "^2.2.2",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "node-fetch": "^3.3.2",
     "ollama": "^0.6.3",
     "openai": "^6.16.0",
     "twilio": "^5.12.0"
